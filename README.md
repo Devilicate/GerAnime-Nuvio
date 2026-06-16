@@ -1,23 +1,19 @@
 # GerAnime-Nuvio
-<<<<<<< HEAD
-AniWorld provider for Nuvio that gets you direct german dubbed streams
-=======
 
 AniWorld provider for Nuvio that prioritizes anime streams with German-dubbed sources and direct playable URLs.
 
 ## Installation
 
-1. Open Nuvio and go to the plugin or scraper manager.
-2. Add the remote repository URL for `manifest.json` from GitHub.
-3. Enable the AniWorld provider and refresh Nuvio.
+1. Open Nuvio and go to Settings > Content & Discovery > Plugins
+2. Paste https://raw.githubusercontent.com/Devilicate/GerAnime-Nuvio/refs/heads/main/manifest.json in the Plugin manifest URL field.
+3. Install Plugin Repository
 
 ## Usage
 
-This provider resolves AniWorld streams using AniList/TMDB metadata with fallback title matching and redirect handling.
+This provider resolves AniWorld streams using AniList/TMDB metadata looking for titles on AniWorld.
 
-## Notes
+## To-Do
 
-- Uses AniList and ARM metadata lookup services.
-- Designed to avoid requiring a TMDB API key for public distribution.
-- Supports both movie and TV anime content when available.
->>>>>>> ed1c216 (Initial GerAnime-Nuvio plugin)
+- Movie and Special/OVA scraping still has some problems that are to be fixed.
+- Get seperate streams for GerDub and JapSub
+- Always prefer highest Quality (maybe even show seperate streams for each Quality)
