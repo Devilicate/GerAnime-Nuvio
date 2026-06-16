@@ -52,6 +52,10 @@ class AniWorldClient {
                 response.headers.forEach((value, key) => {
                     responseHeaders[key.toLowerCase()] = value;
                 });
+            } else if (response.headers && typeof response.headers.entries === 'function') {
+                for (const [key, value] of response.headers.entries()) {
+                    responseHeaders[key.toLowerCase()] = value;
+                }
             } else if (response.headers && typeof response.headers === 'object') {
                 for (const key in response.headers) {
                     if (Object.prototype.hasOwnProperty.call(response.headers, key)) {
@@ -305,16 +309,37 @@ class AniWorldClient {
         if (!Array.isArray(results) || results.length === 0) return null;
         if (!targetTitle) return results[0];
 
+        const cleanedTarget = this._cleanTitle(targetTitle);
         let best = null;
         let bestScore = 0;
         for (const result of results) {
-            const score = this.getSimilarity(result.title || result.name || '', targetTitle);
+            const cleanedResult = this._cleanTitle(result.title || result.name || '');
+            const score = this.getSimilarity(cleanedResult, cleanedTarget);
             if (score > bestScore) {
                 bestScore = score;
                 best = result;
             }
         }
         return bestScore > 0.4 ? best : results[0];
+    }
+
+    _stripHtmlTags(text) {
+        return text ? text.replace(/<[^>]+>/g, '').trim() : '';
+    }
+
+    _decodeHtmlEntities(text) {
+        if (!text) return '';
+        return text
+            .replace(/&quot;|&#34;/g, '"')
+            .replace(/&amp;|&#38;/g, '&')
+            .replace(/&lt;|&#60;/g, '<')
+            .replace(/&gt;|&#62;/g, '>')
+            .replace(/&nbsp;|&#160;/g, ' ')
+            .replace(/&apos;|&#39;/g, "'");
+    }
+
+    _cleanTitle(text) {
+        return this._decodeHtmlEntities(this._stripHtmlTags(text || '')).replace(/\s+/g, ' ').trim();
     }
 
     // ═══════════════════════════════════════════════════
@@ -416,11 +441,11 @@ class AniWorldClient {
 
         const title = meta.title ? (meta.title.romaji || meta.title.english || meta.title.native || null) : null;
         if (type === 'movie') {
-            const seriesTitle = this._findSeriesRelationTitle(meta);
+            const movieTitle = title || this._findSeriesRelationTitle(meta);
             return {
-                title: seriesTitle || title,
+                title: movieTitle,
                 ep: 1,
-                seasonLabel: seriesTitle ? 'filme' : `${targetSeason}`,
+                seasonLabel: '1',
             };
         }
 
@@ -515,6 +540,13 @@ class AniWorldClient {
 
         if (statusCode >= 300 && statusCode < 400 && headers.location) {
             return new URL(headers.location, redirectUrl).toString();
+        }
+
+        if (headers.refresh) {
+            const refreshMatch = headers.refresh.match(/^[^\d]*(\d+)\s*;\s*url=(.+)$/i);
+            if (refreshMatch && refreshMatch[2]) {
+                return new URL(refreshMatch[2].trim().replace(/^['"]|['"]$/g, ''), redirectUrl).toString();
+            }
         }
 
         // Try common JS-based redirects
@@ -671,9 +703,20 @@ class AniWorldClient {
     _buildEpisodeUrl(bestLink, seasonSegment, episodeNumber) {
         let link = bestLink.replace(/\/+$/, '');
         const episodePattern = /\/staffel-[^\/]+\/episode-[^\/]+$/i;
-        if (episodePattern.test(link)) {
-            link = link.replace(episodePattern, '');
+        const moviePattern = /\/filme\/film-[0-9]+$/i;
+        if (episodePattern.test(link) || moviePattern.test(link)) {
+            return link;
         }
+
+        // A movie/special that belongs to a series usually lives under the series
+        // page path /filme/film-x. Standalone movie entries use /staffel-x/episode-x.
+        if (seasonSegment === 'filme' || seasonSegment === 'movie' || seasonSegment === '1') {
+            const pathname = new URL(link, AniWorldClient.BASE_URL).pathname;
+            if (/^\/anime\/stream\/[^\/]+$/.test(pathname)) {
+                return new URL(`${pathname}/filme/film-${episodeNumber}`, AniWorldClient.BASE_URL).toString();
+            }
+        }
+
         return new URL(`${link}/staffel-${seasonSegment}/episode-${episodeNumber}`, AniWorldClient.BASE_URL).toString();
     }
 }
