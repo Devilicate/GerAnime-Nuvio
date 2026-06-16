@@ -658,7 +658,8 @@ if (require.main === module) {
     });
 }
 
-module.exports = {
-    name: 'AniWorld',
-    getStreams,
-};
+const provider = getStreams;
+provider.name = 'AniWorld';
+provider.getStreams = getStreams;
+provider.default = getStreams;
+module.exports = provider;
