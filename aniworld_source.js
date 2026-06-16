@@ -806,6 +806,9 @@ class AniWorldClient {
     // Preferred Stream Selection
     // ═══════════════════════════════════════════════════
     async getPreferredStream(episodeUrl, preferredLanguages = ['german', 'german-sub', 'english', 'original']) {
+        if (episodeUrl && episodeUrl.startsWith('/')) {
+            episodeUrl = new URL(episodeUrl, AniWorldClient.BASE_URL).toString();
+        }
         const hosts = await this.getEpisodeHosts(episodeUrl);
         if (!hosts.length) throw new Error(`No hosters found on episode page: ${episodeUrl}`);
 
@@ -839,18 +842,25 @@ class AniWorldClient {
 
         const seasonSegment = (resolved && resolved.seasonLabel) ? resolved.seasonLabel : `${season}`;
         const episodeNumber = (resolved && resolved.ep) ? resolved.ep : episode;
-        const episodeUrl = await this._buildEpisodeUrl(best.link, seasonSegment, episodeNumber, movieTitle);
+        const episodeUrl = await this._buildEpisodeUrl(best.link, seasonSegment, episodeNumber, movieTitle, type === 'movie');
         return this.getPreferredStream(episodeUrl, preferredLanguages);
     }
 
-    async _buildEpisodeUrl(bestLink, seasonSegment, episodeNumber, movieTitle) {
+    async _buildEpisodeUrl(bestLink, seasonSegment, episodeNumber, movieTitle, isMovieSearch = false) {
         let link = bestLink.replace(/\/+$/, '');
         const episodePattern = /\/staffel-[^\/]+\/episode-[^\/]+$/i;
         const moviePattern = /\/filme\/film-[0-9]+$/i;
 
+        const basePath = link.replace(/\/(filme\/film-[0-9]+|staffel-[^\/]+\/episode-[^\/]+)$/i, '');
+        if (isMovieSearch && episodePattern.test(link)) {
+            if (movieTitle) {
+                const matched = await this._findBestFilmPage(basePath, movieTitle);
+                if (matched) return matched;
+            }
+        }
+
         // If we're building a movie URL, normalize any existing episode URL to the series base first.
         if (seasonSegment === 'filme' || seasonSegment === 'movie') {
-            const basePath = link.replace(/\/(filme\/film-[0-9]+|staffel-[^\/]+\/episode-[^\/]+)$/i, '');
             if (moviePattern.test(link)) {
                 if (movieTitle) {
                     const matched = await this._findBestFilmPage(basePath, movieTitle);
