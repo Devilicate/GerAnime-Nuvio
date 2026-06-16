@@ -466,13 +466,62 @@ class AniWorldClient {
         return matches >= Math.max(3, Math.ceil(words.length * 0.6));
     }
 
+    _parseFilmIndexCandidates(html, basePath) {
+        if (!html) return [];
+        const candidates = [];
+        const pattern = /<a[^>]*href=['"]([^'"]*\/filme\/film-[0-9]+)['"][^>]*>([\s\S]*?)<\/a>/gi;
+        let match;
+        while ((match = pattern.exec(html)) !== null) {
+            const href = match[1].trim();
+            const body = match[2].replace(/<[^>]+>/g, ' ').trim();
+            const labelMatch = body.match(/\[(movie|special|ova)\]/i);
+            const type = labelMatch ? labelMatch[1].toLowerCase() : 'unknown';
+            const title = this._cleanTitle(body.replace(/\[(movie|special|ova)\]/ig, '').trim());
+            const url = href.startsWith('http') ? href : new URL(href, AniWorldClient.BASE_URL).toString();
+            candidates.push({ url, title, type, raw: body });
+        }
+        return candidates;
+    }
+
     async _findBestFilmPage(basePath, targetTitle) {
         if (!targetTitle) return null;
         const cleanedTarget = this._cleanTitle(targetTitle);
         let bestUrl = null;
         let bestScore = 0;
-        const candidateLimit = 8;
 
+        try {
+            const indexUrl = new URL(`${basePath}/filme`, AniWorldClient.BASE_URL).toString();
+            const indexResponse = await this._fetchWithResponse(indexUrl, 'GET', null, { Referer: AniWorldClient.BASE_URL });
+            if (indexResponse && indexResponse.statusCode >= 200 && indexResponse.statusCode < 300 && indexResponse.body) {
+                const candidates = this._parseFilmIndexCandidates(indexResponse.body.toString(), basePath);
+                const movieCandidates = candidates.filter((item) => item.type === 'movie');
+                const fallbackCandidates = candidates.filter((item) => item.type === 'unknown');
+
+                const chooseCandidates = movieCandidates.length ? movieCandidates : fallbackCandidates;
+                for (const candidate of chooseCandidates) {
+                    let score = 0;
+                    if (candidate.title) {
+                        score = this.getSimilarity(candidate.title, cleanedTarget);
+                    }
+                    if (candidate.type === 'movie') score += 0.2;
+                    if (score < 0.25 && this._pageContainsTitle(candidate.raw + '', targetTitle)) {
+                        score = 0.95;
+                    }
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestUrl = candidate.url;
+                    }
+                }
+            }
+        } catch (e) {
+            // ignore index parsing failures
+        }
+
+        if (bestUrl && bestScore >= 0.25) {
+            return bestUrl;
+        }
+
+        const candidateLimit = 8;
         for (let i = 1; i <= candidateLimit; i += 1) {
             const candidateUrl = new URL(`${basePath}/filme/film-${i}`, AniWorldClient.BASE_URL).toString();
             try {
