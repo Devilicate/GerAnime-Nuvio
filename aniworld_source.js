@@ -9,13 +9,7 @@ const https = require('https');
 const { URL, URLSearchParams } = require('url');
 
 class AniWorldClient {
-    static BASE_URL = 'https://aniworld.to';
-    static SEARCH_PATH = '/ajax/search';
-    static DEFAULT_HEADERS = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    };
-    static VOE_JUNK_PARTS = ['@$', '^^', '~@', '%?', '*~', '!!', '#&'];
+    // Compatibility: static fields assigned after class declaration
 
     // ═══════════════════════════════════════════════════
     // HTTP Helpers
@@ -137,7 +131,7 @@ class AniWorldClient {
                 const anilistId = await this.getAnilistId(tmdbId, type);
                 if (anilistId) {
                     const meta = await this.getAnilistMeta(anilistId);
-                    const title = meta?.title?.romaji || meta?.title?.english || meta?.title?.native || null;
+                    const title = meta && meta.title ? (meta.title.romaji || meta.title.english || meta.title.native || null) : null;
                     if (title) return title;
                 }
             } catch (e) {
@@ -151,8 +145,8 @@ class AniWorldClient {
                 const armData = JSON.parse(armBody || '[]');
                 if (Array.isArray(armData) && armData.length > 0) {
                     const first = armData[0];
-                    if (first?.title) return first.title;
-                    if (first?.name) return first.name;
+                    if (first && first.title) return first.title;
+                    if (first && first.name) return first.name;
                 }
             } catch (e) {
                 // ignore and continue
@@ -189,7 +183,7 @@ class AniWorldClient {
         const anilistId = await this.getAnilistId(tmdbId, type);
         if (anilistId) {
             const resolved = await this.resolveAnilistEpisode(anilistId, season, episode, type);
-            if (resolved?.title) {
+            if (resolved && resolved.title) {
                 const r = await trySearch(resolved.title);
                 if (r.length) return {results: r, resolved};
             }
@@ -315,7 +309,7 @@ class AniWorldClient {
                 Accept: 'application/json',
             });
             const json = JSON.parse(response || '{}');
-            return json.data?.Media || null;
+            return json.data && json.data.Media ? json.data.Media : null;
         } catch (error) {
             console.error('getAnilistMeta error:', error);
             return null;
@@ -323,7 +317,7 @@ class AniWorldClient {
     }
 
     _findSeriesRelationTitle(meta) {
-        if (!meta?.relations?.edges || !Array.isArray(meta.relations.edges)) return null;
+        if (!meta || !meta.relations || !Array.isArray(meta.relations.edges)) return null;
 
         const preferredTypes = [
             'PARENT',
@@ -338,12 +332,16 @@ class AniWorldClient {
         ];
 
         const candidates = meta.relations.edges
-            .map((edge) => ({
-                title: edge.node?.title?.romaji || edge.node?.title?.english || edge.node?.title?.native || null,
-                relationType: edge.relationType || 'OTHER',
-                format: edge.node?.format || null,
-                type: edge.node?.type || null,
-            }))
+            .map((edge) => {
+                const node = edge.node || {};
+                const nodeTitle = node.title || {};
+                return {
+                    title: node.title ? (node.title.romaji || node.title.english || node.title.native || null) : null,
+                    relationType: edge.relationType || 'OTHER',
+                    format: node.format || null,
+                    type: node.type || null,
+                };
+            })
             .filter((item) => item.title && item.type === 'ANIME' && ['TV', 'TV_SHORT', 'ONA', 'OVA'].includes(item.format));
 
         if (!candidates.length) return null;
@@ -354,14 +352,14 @@ class AniWorldClient {
             return (aIndex === -1 ? preferredTypes.length : aIndex) - (bIndex === -1 ? preferredTypes.length : bIndex);
         });
 
-        return candidates[0]?.title || null;
+        return candidates[0] && candidates[0].title ? candidates[0].title : null;
     }
 
     async resolveAnilistEpisode(anilistId, targetSeason, targetEp, type = 'tv') {
         const meta = await this.getAnilistMeta(anilistId);
         if (!meta) return { title: null, ep: targetEp, seasonLabel: `${targetSeason}` };
 
-        const title = meta.title?.romaji || meta.title?.english || meta.title?.native || null;
+        const title = meta.title ? (meta.title.romaji || meta.title.english || meta.title.native || null) : null;
         if (type === 'movie') {
             const seriesTitle = this._findSeriesRelationTitle(meta);
             return {
@@ -591,17 +589,25 @@ class AniWorldClient {
             throw new Error(`No AniWorld search results found for TMDB ID ${tmdbId}`);
         }
 
-        const targetTitle = resolved?.title || (await this.getSearchTitleFromTmdb(tmdbId, type, season, episode, fallbackTitle)) || fallbackTitle || '';
+        const targetTitle = (resolved && resolved.title) ? resolved.title : (await this.getSearchTitleFromTmdb(tmdbId, type, season, episode, fallbackTitle)) || fallbackTitle || '';
         const best = this.pickBestMatch(results, targetTitle);
         if (!best || !best.link) {
             throw new Error('Could not determine a best AniWorld search result');
         }
 
-        const seasonSegment = resolved?.seasonLabel || `${season}`;
-        const episodeUrl = new URL(`${best.link.replace(/\/+$/, '')}/staffel-${seasonSegment}/episode-${resolved?.ep || episode}`, AniWorldClient.BASE_URL).toString();
+        const seasonSegment = (resolved && resolved.seasonLabel) ? resolved.seasonLabel : `${season}`;
+        const episodeUrl = new URL(`${best.link.replace(/\/+$/, '')}/staffel-${seasonSegment}/episode-${(resolved && resolved.ep) || episode}`, AniWorldClient.BASE_URL).toString();
         return this.getPreferredStream(episodeUrl, preferredLanguages);
     }
 }
+
+AniWorldClient.BASE_URL = 'https://aniworld.to';
+AniWorldClient.SEARCH_PATH = '/ajax/search';
+AniWorldClient.DEFAULT_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36, (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+};
+AniWorldClient.VOE_JUNK_PARTS = ['@$', '^^', '~@', '%?', '*~', '!!', '#&'];
 
 async function getStreams(id, type, season, episode) {
     const client = new AniWorldClient();
