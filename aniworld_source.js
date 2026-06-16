@@ -248,7 +248,7 @@ class AniWorldClient {
                 const anilistId = await this.getAnilistId(tmdbId, type);
                 if (anilistId) {
                     const meta = await this.getAnilistMeta(anilistId);
-                    const title = meta && meta.title ? (meta.title.romaji || meta.title.english || meta.title.native || null) : null;
+                    const title = meta && meta.title ? (meta.title.english || meta.title.romaji || meta.title.native || null) : null;
                     if (title) return title;
                 }
             } catch (e) {
@@ -284,7 +284,7 @@ class AniWorldClient {
         return null;
     }
 
-    async _searchWithFallbacks(tmdbId, type = 'tv', season = 1, episode = 1, fallbackTitle = null, limit = 10) {
+    async _searchWithFallbacks(tmdbId, type = 'tv', season = 1, episode = 1, fallbackTitle = null, limit = 10, tmdbTitle = null) {
         const tried = new Set();
 
         const trySearch = async (title) => {
@@ -296,7 +296,9 @@ class AniWorldClient {
             return res || [];
         };
 
-        const tmdbTitle = await this.getTmdbTitle(tmdbId, type);
+        if (!tmdbTitle) {
+            tmdbTitle = await this.getTmdbTitle(tmdbId, type);
+        }
         const searchTitle = await this.getSearchTitleFromTmdb(tmdbId, type, season, episode, fallbackTitle);
 
         // 1) AniList-resolved title (may already return series title for related movies)
@@ -423,6 +425,57 @@ class AniWorldClient {
         return this._decodeHtmlEntities(this._stripHtmlTags(text || '')).replace(/\s+/g, ' ').trim();
     }
 
+    _extractPageTitle(html) {
+        if (!html) return null;
+        let title = null;
+        const og = html.match(/<meta\s+property=['"]og:title['"]\s+content=['"]([^'"]+)['"]/i);
+        if (og) title = og[1];
+        if (!title) {
+            const named = html.match(/<meta\s+name=['"]title['"]\s+content=['"]([^'"]+)['"]/i);
+            if (named) title = named[1];
+        }
+        if (!title) {
+            const docTitle = html.match(/<title>([^<]+)<\/title>/i);
+            if (docTitle) title = docTitle[1];
+        }
+        if (!title) {
+            const h1 = html.match(/<h1[^>]*>([^<]+)<\/h1>/i);
+            if (h1) title = h1[1];
+        }
+        if (!title) {
+            const h2 = html.match(/<h2[^>]*>([^<]+)<\/h2>/i);
+            if (h2) title = h2[1];
+        }
+        return title ? this._cleanTitle(title) : null;
+    }
+
+    async _findBestFilmPage(basePath, targetTitle) {
+        if (!targetTitle) return null;
+        const cleanedTarget = this._cleanTitle(targetTitle);
+        let bestUrl = null;
+        let bestScore = 0;
+        const candidateLimit = 8;
+
+        for (let i = 1; i <= candidateLimit; i += 1) {
+            const candidateUrl = new URL(`${basePath}/filme/film-${i}`, AniWorldClient.BASE_URL).toString();
+            try {
+                const response = await this._fetchWithResponse(candidateUrl, 'GET', null, { Referer: AniWorldClient.BASE_URL });
+                if (!response || response.statusCode < 200 || response.statusCode >= 300 || !response.body) continue;
+                const pageTitle = this._extractPageTitle(response.body.toString());
+                if (!pageTitle) continue;
+                const score = this.getSimilarity(pageTitle, cleanedTarget);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestUrl = candidateUrl;
+                }
+            } catch (e) {
+                // ignore unreachable / missing film pages
+            }
+        }
+
+        return bestScore >= 0.25 ? bestUrl : null;
+    }
+
     // ═══════════════════════════════════════════════════
     // TMDB → AniList ID Mapping
     // ═══════════════════════════════════════════════════
@@ -497,7 +550,7 @@ class AniWorldClient {
                 const node = edge.node || {};
                 const nodeTitle = node.title || {};
                 return {
-                    title: node.title ? (node.title.romaji || node.title.english || node.title.native || null) : null,
+                    title: node.title ? (node.title.english || node.title.romaji || node.title.native || null) : null,
                     relationType: edge.relationType || 'OTHER',
                     format: node.format || null,
                     type: node.type || null,
@@ -520,7 +573,7 @@ class AniWorldClient {
         const meta = await this.getAnilistMeta(anilistId);
         if (!meta) return { title: null, ep: targetEp, seasonLabel: `${targetSeason}` };
 
-        const title = meta.title ? (meta.title.romaji || meta.title.english || meta.title.native || null) : null;
+        const title = meta.title ? (meta.title.english || meta.title.romaji || meta.title.native || null) : null;
         if (type === 'movie') {
             const seriesTitle = this._findSeriesRelationTitle(meta);
             if (seriesTitle) {
@@ -771,12 +824,14 @@ class AniWorldClient {
     }
 
     async getStreamFromTmdb(tmdbId, type = 'tv', season = 1, episode = 1, fallbackTitle = null, preferredLanguages = ['german', 'german-sub', 'english', 'original']) {
-        const { results, resolved } = await this._searchWithFallbacks(tmdbId, type, season, episode, fallbackTitle, 10);
+        const tmdbTitle = await this.getTmdbTitle(tmdbId, type);
+        const { results, resolved } = await this._searchWithFallbacks(tmdbId, type, season, episode, fallbackTitle, 10, tmdbTitle);
         if (!results || results.length === 0) {
             throw new Error(`No AniWorld search results found for TMDB ID ${tmdbId}`);
         }
 
         const targetTitle = (resolved && resolved.title) ? resolved.title : (await this.getSearchTitleFromTmdb(tmdbId, type, season, episode, fallbackTitle)) || fallbackTitle || '';
+        const movieTitle = tmdbTitle || fallbackTitle || targetTitle;
         const best = this.pickBestMatch(results, targetTitle);
         if (!best || !best.link) {
             throw new Error('Could not determine a best AniWorld search result');
@@ -784,23 +839,38 @@ class AniWorldClient {
 
         const seasonSegment = (resolved && resolved.seasonLabel) ? resolved.seasonLabel : `${season}`;
         const episodeNumber = (resolved && resolved.ep) ? resolved.ep : episode;
-        const episodeUrl = this._buildEpisodeUrl(best.link, seasonSegment, episodeNumber);
+        const episodeUrl = await this._buildEpisodeUrl(best.link, seasonSegment, episodeNumber, movieTitle);
         return this.getPreferredStream(episodeUrl, preferredLanguages);
     }
 
-    _buildEpisodeUrl(bestLink, seasonSegment, episodeNumber) {
+    async _buildEpisodeUrl(bestLink, seasonSegment, episodeNumber, movieTitle) {
         let link = bestLink.replace(/\/+$/, '');
         const episodePattern = /\/staffel-[^\/]+\/episode-[^\/]+$/i;
         const moviePattern = /\/filme\/film-[0-9]+$/i;
-        if (episodePattern.test(link) || moviePattern.test(link)) {
-            return link;
+
+        // If we're building a movie URL, normalize any existing episode URL to the series base first.
+        if (seasonSegment === 'filme' || seasonSegment === 'movie') {
+            const basePath = link.replace(/\/(filme\/film-[0-9]+|staffel-[^\/]+\/episode-[^\/]+)$/i, '');
+            if (moviePattern.test(link)) {
+                if (movieTitle) {
+                    const matched = await this._findBestFilmPage(basePath, movieTitle);
+                    if (matched) return matched;
+                }
+                return link;
+            }
+
+            if (movieTitle) {
+                const matched = await this._findBestFilmPage(basePath, movieTitle);
+                if (matched) return matched;
+            }
+            return new URL(`${basePath}/filme/film-${episodeNumber}`, AniWorldClient.BASE_URL).toString();
         }
 
-        if (seasonSegment === 'filme' || seasonSegment === 'movie') {
-            const pathname = new URL(link, AniWorldClient.BASE_URL).pathname;
-            if (/^\/anime\/stream\/[^\/]+$/.test(pathname)) {
-                return new URL(`${pathname}/filme/film-${episodeNumber}`, AniWorldClient.BASE_URL).toString();
-            }
+        if (moviePattern.test(link)) {
+            return link;
+        }
+        if (episodePattern.test(link)) {
+            return link;
         }
 
         return new URL(`${link}/staffel-${seasonSegment}/episode-${episodeNumber}`, AniWorldClient.BASE_URL).toString();
