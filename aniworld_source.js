@@ -655,8 +655,18 @@ class AniWorldClient {
         }
 
         const seasonSegment = (resolved && resolved.seasonLabel) ? resolved.seasonLabel : `${season}`;
-        const episodeUrl = new URL(`${best.link.replace(/\/+$/, '')}/staffel-${seasonSegment}/episode-${(resolved && resolved.ep) || episode}`, AniWorldClient.BASE_URL).toString();
+        const episodeNumber = (resolved && resolved.ep) ? resolved.ep : episode;
+        const episodeUrl = this._buildEpisodeUrl(best.link, seasonSegment, episodeNumber);
         return this.getPreferredStream(episodeUrl, preferredLanguages);
+    }
+
+    _buildEpisodeUrl(bestLink, seasonSegment, episodeNumber) {
+        let link = bestLink.replace(/\/+$/, '');
+        const episodePattern = /\/staffel-[^\/]+\/episode-[^\/]+$/i;
+        if (episodePattern.test(link)) {
+            link = link.replace(episodePattern, '');
+        }
+        return new URL(`${link}/staffel-${seasonSegment}/episode-${episodeNumber}`, AniWorldClient.BASE_URL).toString();
     }
 }
 
