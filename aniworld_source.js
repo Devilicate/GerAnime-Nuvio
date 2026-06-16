@@ -48,9 +48,17 @@ class AniWorldClient {
             const response = await fetch(url, options);
             const body = await response.text();
             const responseHeaders = {};
-            response.headers.forEach((value, key) => {
-                responseHeaders[key.toLowerCase()] = value;
-            });
+            if (response.headers && typeof response.headers.forEach === 'function') {
+                response.headers.forEach((value, key) => {
+                    responseHeaders[key.toLowerCase()] = value;
+                });
+            } else if (response.headers && typeof response.headers === 'object') {
+                for (const key in response.headers) {
+                    if (Object.prototype.hasOwnProperty.call(response.headers, key)) {
+                        responseHeaders[key.toLowerCase()] = response.headers[key];
+                    }
+                }
+            }
 
             return { body, statusCode: response.status, headers: responseHeaders };
         }
