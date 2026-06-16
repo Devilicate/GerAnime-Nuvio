@@ -603,6 +603,20 @@ class AniWorldClient {
     }
 }
 
+async function getStreams(id, type, season, episode) {
+    const client = new AniWorldClient();
+    const streamUrl = await client.getStreamFromTmdb(id, type, season, episode, null);
+    return [
+        {
+            name: 'AniWorld',
+            title: `AniWorld - ${type} ${season}x${episode}`,
+            url: streamUrl,
+            quality: 'auto',
+            headers: { Referer: AniWorldClient.BASE_URL },
+        },
+    ];
+}
+
 // ═══════════════════════════════════════════════════
 // Self-test / Demo
 // ═══════════════════════════════════════════════════
@@ -644,4 +658,7 @@ if (require.main === module) {
     });
 }
 
-module.exports = AniWorldClient;
+module.exports = {
+    name: 'AniWorld',
+    getStreams,
+};
