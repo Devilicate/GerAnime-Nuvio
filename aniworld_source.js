@@ -449,6 +449,23 @@ class AniWorldClient {
         return title ? this._cleanTitle(title) : null;
     }
 
+    _pageContainsTitle(html, targetTitle) {
+        if (!html || !targetTitle) return false;
+        const normalizedHtml = this._cleanTitle(html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, ''))
+            .toLowerCase();
+        const normalizedTarget = this._cleanTitle(targetTitle).toLowerCase();
+        if (!normalizedTarget) return false;
+        if (normalizedHtml.includes(normalizedTarget)) return true;
+
+        const words = normalizedTarget.split(/\s+/).filter(Boolean);
+        if (words.length < 3) return false;
+        let matches = 0;
+        for (const word of words) {
+            if (normalizedHtml.includes(word)) matches += 1;
+        }
+        return matches >= Math.max(3, Math.ceil(words.length * 0.6));
+    }
+
     async _findBestFilmPage(basePath, targetTitle) {
         if (!targetTitle) return null;
         const cleanedTarget = this._cleanTitle(targetTitle);
@@ -461,9 +478,15 @@ class AniWorldClient {
             try {
                 const response = await this._fetchWithResponse(candidateUrl, 'GET', null, { Referer: AniWorldClient.BASE_URL });
                 if (!response || response.statusCode < 200 || response.statusCode >= 300 || !response.body) continue;
-                const pageTitle = this._extractPageTitle(response.body.toString());
-                if (!pageTitle) continue;
-                const score = this.getSimilarity(pageTitle, cleanedTarget);
+                const body = response.body.toString();
+                const pageTitle = this._extractPageTitle(body);
+                let score = 0;
+                if (pageTitle) {
+                    score = this.getSimilarity(pageTitle, cleanedTarget);
+                }
+                if (score < 0.25 && this._pageContainsTitle(body, targetTitle)) {
+                    score = 0.95;
+                }
                 if (score > bestScore) {
                     bestScore = score;
                     bestUrl = candidateUrl;
