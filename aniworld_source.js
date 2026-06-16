@@ -146,7 +146,14 @@ class AniWorldClient {
         };
         const body = await this._fetch(searchUrl, 'POST', payload, headers);
         const results = body ? JSON.parse(body) : [];
-        return results.slice(0, limit);
+        const filtered = (Array.isArray(results) ? results : []).filter((item) => this._isAnimeStreamResult(item));
+        return filtered.slice(0, limit);
+    }
+
+    _isAnimeStreamResult(item) {
+        if (!item || !item.link) return false;
+        const link = String(item.link || '').trim();
+        return /^\/anime\/stream\//i.test(link) || /^https?:\/\/[^\/]+\/anime\/stream\//i.test(link);
     }
 
     async searchFromMetadata(metadataTitle, limit = 20) {
