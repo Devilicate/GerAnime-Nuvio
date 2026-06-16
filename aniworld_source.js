@@ -5,8 +5,8 @@
 // TMDB -> AniList mappings, parsing episode host lists, and
 // extracting direct stream URLs from supported hosters.
 
-const https = require('https');
-const { URL, URLSearchParams } = require('url');
+// Nuvio Android plugin environment may not support Node built-ins.
+// Use global fetch, URL, and URLSearchParams instead.
 
 class AniWorldClient {
     // Compatibility: static fields assigned after class declaration
@@ -15,62 +15,109 @@ class AniWorldClient {
     // HTTP Helpers
     // ═══════════════════════════════════════════════════
     async _fetch(url, method = 'GET', data = null, headers = {}) {
-        const parsedUrl = new URL(url);
-        const requestHeaders = { ...AniWorldClient.DEFAULT_HEADERS, ...headers };
-        const payload = data ? (typeof data === 'string' ? data : new URLSearchParams(data).toString()) : null;
+        if (typeof fetch === 'function') {
+            const requestHeaders = Object.assign({}, AniWorldClient.DEFAULT_HEADERS, headers);
+            const options = {
+                method,
+                headers: requestHeaders,
+            };
 
-        if (payload && !requestHeaders['Content-Length']) {
-            requestHeaders['Content-Length'] = Buffer.byteLength(payload);
+            if (data != null) {
+                options.body = typeof data === 'string' ? data : new URLSearchParams(data).toString();
+            }
+
+            const response = await fetch(url, options);
+            return await response.text();
         }
 
-        const options = {
-            method,
-            headers: requestHeaders,
-        };
-
-        return new Promise((resolve, reject) => {
-            const req = https.request(parsedUrl, options, (res) => {
-                let body = '';
-                res.setEncoding('utf8');
-                res.on('data', (chunk) => (body += chunk));
-                res.on('end', () => resolve(body));
-            });
-
-            req.on('error', reject);
-            if (payload) {
-                req.write(payload);
-            }
-            req.end();
-        });
+        return await this._xhrFetch(url, method, data, headers);
     }
 
     async _fetchWithResponse(url, method = 'GET', data = null, headers = {}) {
-        const parsedUrl = new URL(url);
-        const requestHeaders = { ...AniWorldClient.DEFAULT_HEADERS, ...headers };
-        const payload = data ? (typeof data === 'string' ? data : new URLSearchParams(data).toString()) : null;
+        if (typeof fetch === 'function') {
+            const requestHeaders = Object.assign({}, AniWorldClient.DEFAULT_HEADERS, headers);
+            const options = {
+                method,
+                headers: requestHeaders,
+            };
 
-        if (payload && !requestHeaders['Content-Length']) {
-            requestHeaders['Content-Length'] = Buffer.byteLength(payload);
-        }
+            if (data != null) {
+                options.body = typeof data === 'string' ? data : new URLSearchParams(data).toString();
+            }
 
-        const options = {
-            method,
-            headers: requestHeaders,
-        };
-
-        return new Promise((resolve, reject) => {
-            const req = https.request(parsedUrl, options, (res) => {
-                let body = '';
-                res.setEncoding('utf8');
-                res.on('data', (chunk) => (body += chunk));
-                res.on('end', () => resolve({ body, statusCode: res.statusCode, headers: res.headers }));
+            const response = await fetch(url, options);
+            const body = await response.text();
+            const responseHeaders = {};
+            response.headers.forEach((value, key) => {
+                responseHeaders[key.toLowerCase()] = value;
             });
 
-            req.on('error', reject);
-            if (payload) {
-                req.write(payload);
+            return { body, statusCode: response.status, headers: responseHeaders };
+        }
+
+        return await this._xhrFetchWithResponse(url, method, data, headers);
+    }
+
+    _xhrFetch(url, method = 'GET', data = null, headers = {}) {
+        return new Promise((resolve, reject) => {
+            if (typeof XMLHttpRequest === 'undefined') {
+                return reject(new Error('No fetch or XMLHttpRequest available'));
             }
-            req.end();
+
+            const xhr = new XMLHttpRequest();
+            xhr.open(method, url, true);
+            const headerList = Object.assign({}, AniWorldClient.DEFAULT_HEADERS, headers);
+            Object.keys(headerList).forEach((key) => {
+                xhr.setRequestHeader(key, headerList[key]);
+            });
+
+            xhr.onreadystatechange = () => {
+                if (xhr.readyState === 4) {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        resolve(xhr.responseText);
+                    } else {
+                        reject(new Error(`XHR request failed: ${xhr.status}`));
+                    }
+                }
+            };
+            xhr.onerror = () => reject(new Error('XHR network error'));
+            const body = data != null ? (typeof data === 'string' ? data : new URLSearchParams(data).toString()) : null;
+            xhr.send(body);
+        });
+    }
+
+    _xhrFetchWithResponse(url, method = 'GET', data = null, headers = {}) {
+        return new Promise((resolve, reject) => {
+            if (typeof XMLHttpRequest === 'undefined') {
+                return reject(new Error('No fetch or XMLHttpRequest available'));
+            }
+
+            const xhr = new XMLHttpRequest();
+            xhr.open(method, url, true);
+            const headerList = Object.assign({}, AniWorldClient.DEFAULT_HEADERS, headers);
+            Object.keys(headerList).forEach((key) => {
+                xhr.setRequestHeader(key, headerList[key]);
+            });
+
+            xhr.onreadystatechange = () => {
+                if (xhr.readyState === 4) {
+                    const responseHeaders = {};
+                    xhr.getAllResponseHeaders().trim().split(/\r?\n/).forEach((line) => {
+                        const parts = line.split(': ');
+                        if (parts.length === 2) {
+                            responseHeaders[parts[0].toLowerCase()] = parts[1];
+                        }
+                    });
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        resolve({ body: xhr.responseText, statusCode: xhr.status, headers: responseHeaders });
+                    } else {
+                        reject(new Error(`XHR request failed: ${xhr.status}`));
+                    }
+                }
+            };
+            xhr.onerror = () => reject(new Error('XHR network error'));
+            const body = data != null ? (typeof data === 'string' ? data : new URLSearchParams(data).toString()) : null;
+            xhr.send(body);
         });
     }
 
@@ -530,16 +577,15 @@ class AniWorldClient {
         }
 
         payload = this._rot13(payload);
-        for (const junk of AniWorldClient.VOE_JUNK_PARTS) {
-            payload = payload.split(junk).join('_');
+        for (let i = 0; i < AniWorldClient.VOE_JUNK_PARTS.length; i += 1) {
+            payload = payload.split(AniWorldClient.VOE_JUNK_PARTS[i]).join('_');
         }
         payload = payload.replace(/_/g, '');
 
-        const decodedBuffer = Buffer.from(payload, 'base64');
-        const decodedStr = decodedBuffer.toString('utf8');
-        const shifted = [...decodedStr].map((ch) => String.fromCharCode(ch.charCodeAt(0) - 3)).join('');
+        const decodedStr = this._base64DecodeUtf8(payload);
+        const shifted = decodedStr.split('').map((ch) => String.fromCharCode(ch.charCodeAt(0) - 3)).join('');
         const reversed = shifted.split('').reverse().join('');
-        return Buffer.from(reversed, 'base64').toString('utf8');
+        return this._base64DecodeUtf8(reversed);
     }
 
     // ═══════════════════════════════════════════════════
@@ -553,13 +599,26 @@ class AniWorldClient {
     }
 
     _rot13(data) {
-        return [...data]
-            .map((ch) => {
-                if (ch >= 'A' && ch <= 'Z') return String.fromCharCode(((ch.charCodeAt(0) - 65 + 13) % 26) + 65);
-                if (ch >= 'a' && ch <= 'z') return String.fromCharCode(((ch.charCodeAt(0) - 97 + 13) % 26) + 97);
-                return ch;
-            })
-            .join('');
+        return data.split('').map((ch) => {
+            if (ch >= 'A' && ch <= 'Z') return String.fromCharCode(((ch.charCodeAt(0) - 65 + 13) % 26) + 65);
+            if (ch >= 'a' && ch <= 'z') return String.fromCharCode(((ch.charCodeAt(0) - 97 + 13) % 26) + 97);
+            return ch;
+        }).join('');
+    }
+
+    _base64DecodeUtf8(base64) {
+        const binary = typeof atob === 'function' ? atob(base64) : null;
+        if (binary !== null) {
+            let percentEncoded = '';
+            for (let i = 0; i < binary.length; i += 1) {
+                percentEncoded += '%' + ('00' + binary.charCodeAt(i).toString(16)).slice(-2);
+            }
+            return decodeURIComponent(percentEncoded);
+        }
+        if (typeof Buffer !== 'undefined') {
+            return Buffer.from(base64, 'base64').toString('utf8');
+        }
+        throw new Error('Base64 decode not supported in this environment');
     }
 
     // ═══════════════════════════════════════════════════
@@ -626,7 +685,7 @@ async function getStreams(id, type, season, episode) {
 // ═══════════════════════════════════════════════════
 // Self-test / Demo
 // ═══════════════════════════════════════════════════
-if (require.main === module) {
+if (typeof require !== 'undefined' && require.main === module) {
     (async () => {
         const client = new AniWorldClient();
         const metadataTitle = 'Serial Experiments Lain Staffel 1 Episode 1';
@@ -660,7 +719,9 @@ if (require.main === module) {
         console.log('\nUse getStreamFromTmdb(tmdbId, type, season, episode, fallbackTitle) to fetch the direct stream URL.');
     })().catch((error) => {
         console.error(error);
-        process.exit(1);
+        if (typeof process !== 'undefined' && process && typeof process.exit === 'function') {
+            process.exit(1);
+        }
     });
 }
 
@@ -668,4 +729,14 @@ const provider = getStreams;
 provider.name = 'AniWorld';
 provider.getStreams = getStreams;
 provider.default = getStreams;
-module.exports = provider;
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = provider;
+} else {
+    var root = (typeof globalThis !== 'undefined' && globalThis)
+        || (typeof self !== 'undefined' && self)
+        || (typeof window !== 'undefined' && window)
+        || (typeof global !== 'undefined' && global);
+    if (root) {
+        root.AniWorldProvider = provider;
+    }
+}
