@@ -624,7 +624,7 @@ if (require.main === module) {
     (async () => {
         const client = new AniWorldClient();
         const metadataTitle = 'Serial Experiments Lain Staffel 1 Episode 1';
-        const tmdbId = 1111; // replace with the actual TMDB ID from NuVio metadata
+        const tmdbId = 1087;
         const type = 'tv';
         const season = 1;
         const episode = 1;
