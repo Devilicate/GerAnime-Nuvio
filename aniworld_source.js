@@ -168,14 +168,65 @@ class AniWorldClient {
     }
 
     async getSearchTitleFromTmdb(tmdbId, type = 'tv', season = 1, episode = 1, fallbackTitle = null) {
+        const isNumeric = (value) => typeof value === 'string' && /^\d+$/.test(value.trim());
         const anilistId = await this.getAnilistId(tmdbId, type);
         if (anilistId) {
             const resolved = await this.resolveAnilistEpisode(anilistId, season, episode, type);
-            if (resolved.title) {
+            if (resolved && resolved.title && !isNumeric(resolved.title)) {
                 return resolved.title;
             }
         }
-        return fallbackTitle;
+        if (fallbackTitle && !isNumeric(fallbackTitle)) {
+            return fallbackTitle;
+        }
+        const tmdbTitle = await this.getTmdbTitle(tmdbId, type);
+        if (tmdbTitle && !isNumeric(tmdbTitle)) {
+            return tmdbTitle;
+        }
+        return null;
+    }
+
+    _slugifyAniworldTitle(title) {
+        if (!title) return null;
+        return title
+            .toString()
+            .toLowerCase()
+            .replace(/ä/g, 'ae')
+            .replace(/ö/g, 'oe')
+            .replace(/ü/g, 'ue')
+            .replace(/ß/g, 'ss')
+            .replace(/&/g, 'und')
+            .replace(/["'!?.:,;(){}\[\]]+/g, '')
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+            .replace(/-+/g, '-');
+    }
+
+    async _findAniworldPageForTitle(title) {
+        const slug = this._slugifyAniworldTitle(this._cleanTitle(title));
+        if (!slug) return null;
+
+        const candidates = [
+            `/anime/stream/${slug}`,
+            `/anime/stream/${slug}/filme/film-1`,
+            `/anime/stream/${slug}/staffel-1/episode-1`,
+        ];
+
+        for (const path of candidates) {
+            try {
+                const url = new URL(path, AniWorldClient.BASE_URL).toString();
+                const response = await this._fetchWithResponse(url, 'GET', null, { Referer: AniWorldClient.BASE_URL });
+                if (response && response.statusCode >= 200 && response.statusCode < 300 && response.body) {
+                    const body = response.body.toString();
+                    if (/anime\/stream|filme\/film-|staffel-1\/episode-1/i.test(body)) {
+                        return url;
+                    }
+                }
+            } catch (e) {
+                // ignore 404 / network failures and continue
+            }
+        }
+        return null;
     }
 
     normalizeTitleForSearch(title) {
@@ -245,21 +296,31 @@ class AniWorldClient {
             return res || [];
         };
 
+        const tmdbTitle = await this.getTmdbTitle(tmdbId, type);
+        const searchTitle = await this.getSearchTitleFromTmdb(tmdbId, type, season, episode, fallbackTitle);
+
         // 1) AniList-resolved title (may already return series title for related movies)
         const anilistId = await this.getAnilistId(tmdbId, type);
+        let resolved = null;
         if (anilistId) {
-            const resolved = await this.resolveAnilistEpisode(anilistId, season, episode, type);
+            resolved = await this.resolveAnilistEpisode(anilistId, season, episode, type);
             if (resolved && resolved.title) {
                 const r = await trySearch(resolved.title);
                 if (r.length) return {results: r, resolved};
             }
         }
 
-        // 2) TMDB title (requires TMDB_API_KEY in env)
-        const tmdbTitle = await this.getTmdbTitle(tmdbId, type);
-        if (tmdbTitle) {
+        const defaultSeasonLabel = type === 'movie' ? '1' : `${season}`;
+        const movieSeasonLabel = (resolved && resolved.seasonLabel) ? resolved.seasonLabel : defaultSeasonLabel;
+
+        // 2) Search resolved title / TMDB title
+        if (searchTitle) {
+            const r = await trySearch(searchTitle);
+            if (r.length) return {results: r, resolved: { title: searchTitle, ep: episode, seasonLabel: movieSeasonLabel }};
+        }
+        if (tmdbTitle && tmdbTitle !== searchTitle) {
             const r = await trySearch(tmdbTitle);
-            if (r.length) return {results: r, resolved: { title: tmdbTitle, ep: episode, seasonLabel: `${season}` }};
+            if (r.length) return {results: r, resolved: { title: tmdbTitle, ep: episode, seasonLabel: movieSeasonLabel }};
         }
 
         // 3) Fallback title provided by caller
@@ -268,15 +329,28 @@ class AniWorldClient {
             if (r.length) return {results: r, resolved: { title: fallbackTitle, ep: episode, seasonLabel: `${season}` }};
         }
 
-        // 4) As last resort, try a looser normalization of the fallbackTitle or tmdbTitle
-        const loosen = (t) => (t || '').replace(/[:\"'()\[\]]+/g, '').replace(/\s+/g, ' ').trim();
-        if (tmdbTitle) {
-            const r = await trySearch(loosen(tmdbTitle));
-            if (r.length) return {results: r, resolved: { title: tmdbTitle, ep: episode, seasonLabel: `${season}` }};
+        // 4) As last resort, try a looser normalization of the fallbackTitle, TMDB title or resolved search title
+        const loosen = (t) => (t || '').replace(/[:"'()\[\]]+/g, '').replace(/\s+/g, ' ').trim();
+        if (searchTitle) {
+            const r = await trySearch(loosen(searchTitle));
+            if (r.length) return {results: r, resolved: { title: searchTitle, ep: episode, seasonLabel: movieSeasonLabel }};
         }
         if (fallbackTitle) {
             const r = await trySearch(loosen(fallbackTitle));
-            if (r.length) return {results: r, resolved: { title: fallbackTitle, ep: episode, seasonLabel: `${season}` }};
+            if (r.length) return {results: r, resolved: { title: fallbackTitle, ep: episode, seasonLabel: movieSeasonLabel }};
+        }
+        if (tmdbTitle) {
+            const r = await trySearch(loosen(tmdbTitle));
+            if (r.length) return {results: r, resolved: { title: tmdbTitle, ep: episode, seasonLabel: movieSeasonLabel }};
+        }
+
+        // 5) Direct slug lookup fallback
+        const slugCandidates = [searchTitle, tmdbTitle, fallbackTitle].filter(Boolean);
+        for (const candidate of slugCandidates) {
+            const slugPage = await this._findAniworldPageForTitle(candidate);
+            if (slugPage) {
+                return {results: [{ title: candidate, link: slugPage }], resolved: { title: candidate, ep: episode, seasonLabel: movieSeasonLabel }};
+            }
         }
 
         return {results: [], resolved: { title: null, ep: episode, seasonLabel: `${season}` }};
