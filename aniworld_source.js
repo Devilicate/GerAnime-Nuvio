@@ -448,9 +448,16 @@ class AniWorldClient {
 
         const title = meta.title ? (meta.title.romaji || meta.title.english || meta.title.native || null) : null;
         if (type === 'movie') {
-            const movieTitle = title || this._findSeriesRelationTitle(meta);
+            const seriesTitle = this._findSeriesRelationTitle(meta);
+            if (seriesTitle) {
+                return {
+                    title: seriesTitle,
+                    ep: 1,
+                    seasonLabel: 'filme',
+                };
+            }
             return {
-                title: movieTitle,
+                title,
                 ep: 1,
                 seasonLabel: '1',
             };
@@ -715,9 +722,7 @@ class AniWorldClient {
             return link;
         }
 
-        // A movie/special that belongs to a series usually lives under the series
-        // page path /filme/film-x. Standalone movie entries use /staffel-x/episode-x.
-        if (seasonSegment === 'filme' || seasonSegment === 'movie' || seasonSegment === '1') {
+        if (seasonSegment === 'filme' || seasonSegment === 'movie') {
             const pathname = new URL(link, AniWorldClient.BASE_URL).pathname;
             if (/^\/anime\/stream\/[^\/]+$/.test(pathname)) {
                 return new URL(`${pathname}/filme/film-${episodeNumber}`, AniWorldClient.BASE_URL).toString();
